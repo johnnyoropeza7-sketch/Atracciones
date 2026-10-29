@@ -65,7 +65,7 @@
       backdrop-filter: blur(14px);
       -webkit-backdrop-filter: blur(14px);
       border-bottom: 1px solid rgba(212, 175, 55, 0.25);
-      padding: 12px 16px;
+      padding: calc(14px + env(safe-area-inset-top, 0px)) 16px 12px;
     }
 
     .header-container {
@@ -83,9 +83,7 @@
     .app-title {
       font-size: 1.15rem;
       font-weight: 700;
-      background: linear-gradient(135deg, #f6e05e, #d4af37, #b89628);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
+      color: #f6e05e;
       letter-spacing: 0.5px;
     }
 
@@ -324,7 +322,7 @@
     }
 
     footer {
-      padding: 12px;
+      padding: 12px 12px calc(86px + env(safe-area-inset-bottom, 0px));
       text-align: center;
       border-top: 1px solid #181e2a;
       font-size: 0.7rem;
@@ -742,7 +740,7 @@
 
     /* REAL PHOTOS: Wikipedia summary API (CORS-enabled), cached in localStorage */
     const WIKI_TITLES = {"1": "Machu_Picchu", "2": "Pizza_napolitana", "3": "Ailuropoda_melanoleuca", "4": "Torre_Eiffel", "5": "Sushi", "6": "Panthera_leo", "7": "Gran_Muralla_China", "8": "Taco_al_pastor", "9": "Osphranter_rufus", "10": "Taj_Mahal", "11": "Paella", "12": "Aptenodytes_forsteri", "13": "Coliseo", "14": "Ceviche", "15": "Tigre_de_Bengala", "16": "Pirámides_de_Guiza", "17": "Croissant", "18": "Lama_glama", "19": "Estatua_de_la_Libertad", "20": "Ramen", "21": "Loxodonta_africana", "22": "Chichén_Itzá", "23": "Hamburguesa", "24": "Ursus_maritimus", "25": "Cristo_Redentor_(Río_de_Janeiro)", "26": "Asado", "27": "Haliaeetus_leucocephalus", "28": "Petra", "29": "Dim_sum", "30": "Phascolarctos_cinereus", "31": "Templo_Expiatorio_de_la_Sagrada_Familia", "32": "Pad_thai", "33": "Canis_lupus", "34": "Big_Ben", "35": "Fondue", "36": "Vulpes_lagopus", "37": "Monte_Fuji", "38": "Feijoada", "39": "Chelonoidis_niger", "40": "Santorini", "41": "Falafel", "42": "Gorilla_beringei_beringei", "43": "Venecia", "44": "Helado", "45": "Tursiops_truncatus", "46": "Gran_Cañón", "47": "Ópera_de_Sídney", "48": "Burj_Khalifa", "49": "Puente_Golden_Gate", "50": "Stonehenge"};
-    const IMG_CACHE_KEY = 'camilo_img_cache_v2';
+    const IMG_CACHE_KEY = 'camilo_img_cache_v3';
 
     function loadImageCache() {
       try {
@@ -770,15 +768,27 @@
     async function fetchWikiImage(card) {
       const t = WIKI_TITLES[card.id];
       if (!t || card.img) return;
+      let src = null;
       try {
-        const r = await fetch('https://es.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(t));
-        if (!r.ok) return;
-        const j = await r.json();
-        let src = j.thumbnail && j.thumbnail.source;
-        if (src) src = src.replace(/\/\d+px-/, '/800px-');
-        else if (j.originalimage) src = j.originalimage.source;
-        if (src) { card.img = src; applyCardImage(card); saveImageCache(); }
+        const u = 'https://es.wikipedia.org/w/api.php?action=query&format=json&origin=*&redirects=1&prop=pageimages&piprop=thumbnail&pithumbsize=960&titles=' + encodeURIComponent(t.replace(/_/g, ' '));
+        const r = await fetch(u);
+        if (r.ok) {
+          const j = await r.json();
+          const pages = (j.query && j.query.pages) || {};
+          const first = Object.values(pages)[0];
+          if (first && first.thumbnail && first.thumbnail.source) src = first.thumbnail.source;
+        }
       } catch (e) {}
+      if (!src) {
+        try {
+          const r2 = await fetch('https://es.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(t));
+          if (r2.ok) {
+            const j2 = await r2.json();
+            src = (j2.thumbnail && j2.thumbnail.source) || (j2.originalimage && j2.originalimage.source) || null;
+          }
+        } catch (e) {}
+      }
+      if (src) { card.img = src; applyCardImage(card); saveImageCache(); }
     }
     async function loadRealImages() {
       const order = postcards.slice().sort((a, b) => Math.abs(postcards.indexOf(a) - currentIndex) - Math.abs(postcards.indexOf(b) - currentIndex));
@@ -864,6 +874,8 @@
         if (!appInitialized) {
           activateAppSystemSilently();
         }
+        const pt = document.getElementById('proximityToggle');
+        if (pt && pt.checked && !proxStream) startProximity();
         document.removeEventListener('touchend', initOnTouch);
         document.removeEventListener('click', initOnTouch);
       };
@@ -1172,8 +1184,8 @@
     }
 
     function toggleProximity(on) {
-      if (on) { if (!appInitialized) activateAppSystemSilently(); startProximity(); }
-      else { stopProximity(); }
+      if (on) { if (!appInitialized) activateAppSystemSilently(); startProximity().then(saveSettings); }
+      else { stopProximity(); saveSettings(); }
     }
 
     async function startProximity() {
@@ -1327,6 +1339,7 @@
         repeat: document.getElementById('repeatToggle').checked,
         haptic: document.getElementById('hapticToggle').checked,
         proximityCam: document.getElementById('proximityCamSelect').value,
+        proximityOn: document.getElementById('proximityToggle').checked,
         watchNotify: document.getElementById('watchNotificationToggle').checked
       };
       localStorage.setItem('camilo_attractions_settings', JSON.stringify(settings));
@@ -1346,6 +1359,7 @@
           if (s.repeat !== undefined) document.getElementById('repeatToggle').checked = s.repeat;
           if (s.haptic !== undefined) document.getElementById('hapticToggle').checked = s.haptic;
           if (s.proximityCam) document.getElementById('proximityCamSelect').value = s.proximityCam;
+          if (s.proximityOn) document.getElementById('proximityToggle').checked = true;
           if (s.watchNotify !== undefined) document.getElementById('watchNotificationToggle').checked = s.watchNotify;
         } catch (e) {
           console.error("Error cargando ajustes:", e);
