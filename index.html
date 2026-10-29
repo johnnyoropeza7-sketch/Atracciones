@@ -359,6 +359,9 @@
       display: flex;
       flex-direction: column;
       gap: 14px;
+      max-height: calc(100vh - 48px);
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
 
     .modal-header {
@@ -593,25 +596,54 @@
         <button class="modal-close" onclick="closeSecretPanel()">✕</button>
       </div>
 
+      <button id="showBtn" class="btn-test" style="flex:none;width:100%;padding:15px;font-size:1rem;background:linear-gradient(135deg,#b89628,#d4af37);color:#000;border:none;" onclick="toggleShow()">▶ INICIAR FUNCIÓN</button>
+      <div id="showStatus" style="font-size:0.72rem;color:#94a3b8;font-family:monospace;margin-top:-6px;">Detenida.</div>
+
       <div class="option-row">
         <div class="option-label">
-          <span class="option-title">Activar por Proximidad</span>
-          <span class="option-sub">Envía la señal al tapar la cámara (teléfono sobre el pecho). Mantiene la pantalla encendida.</span>
+          <span class="option-title">Proximidad (cámara tapada)</span>
+          <span class="option-sub">Envía la señal al poner el teléfono sobre el pecho. Se repite cada vez que lo tapas.</span>
         </div>
-        <input type="checkbox" id="proximityToggle" onchange="toggleProximity(this.checked)">
+        <input type="checkbox" id="proximityToggle" checked onchange="onModeChange()">
       </div>
 
       <div class="range-group">
         <div class="option-label">
           <span class="option-title">Cámara que se tapa:</span>
         </div>
-        <select id="proximityCamSelect" class="select-input" onchange="if(document.getElementById('proximityToggle').checked) startProximity()">
+        <select id="proximityCamSelect" class="select-input" onchange="onModeChange()">
           <option value="user" selected>Frontal (pantalla contra el pecho)</option>
           <option value="environment">Trasera (pantalla hacia afuera)</option>
         </select>
       </div>
 
-      <div id="proxStatus" style="font-size:0.7rem;color:#94a3b8;font-family:monospace;margin:4px 0 10px;"></div>
+      <div class="range-group">
+        <div class="range-header">
+          <span>Sensibilidad al taparla:</span>
+          <span id="sensVal" class="range-val">40%</span>
+        </div>
+        <input type="range" id="proxSensitivity" min="0.15" max="0.7" step="0.05" value="0.4" class="range-input" oninput="document.getElementById('sensVal').textContent = Math.round(this.value * 100) + '%'; saveSettings();">
+      </div>
+
+      <div id="proxStatus" style="font-size:0.7rem;color:#94a3b8;font-family:monospace;"></div>
+
+      <div class="option-row">
+        <div class="option-label">
+          <span class="option-title">Comando de voz</span>
+          <span class="option-sub">Di «Envíamela», «Transmítela» o «Piénsala» y se envía al instante. Funciona mejor en Safari.</span>
+        </div>
+        <input type="checkbox" id="voiceToggle" checked onchange="onModeChange()">
+      </div>
+
+      <div class="option-row">
+        <div class="option-label">
+          <span class="option-title">También con la palabra «Sí»</span>
+          <span class="option-sub">Envía cuando se escucha un «sí» suelto.</span>
+        </div>
+        <input type="checkbox" id="voiceSiToggle" checked onchange="saveSettings()">
+      </div>
+
+      <div id="voiceStatus" style="font-size:0.7rem;color:#94a3b8;font-family:monospace;"></div>
 
       <div class="option-row">
         <div class="option-label">
@@ -874,8 +906,6 @@
         if (!appInitialized) {
           activateAppSystemSilently();
         }
-        const pt = document.getElementById('proximityToggle');
-        if (pt && pt.checked && !proxStream) startProximity();
         document.removeEventListener('touchend', initOnTouch);
         document.removeEventListener('click', initOnTouch);
       };
@@ -999,10 +1029,12 @@
     /* SCREEN LOCK LISTENER */
     function setupVisibilityListener() {
       document.addEventListener('visibilitychange', () => {
-        const t = document.getElementById('proximityToggle');
-        if (!t || !t.checked) return;
-        if (document.hidden) { stopProximity(true); }
-        else { startProximity(); }
+        if (!showActive) return;
+        if (document.hidden) { stopProximity(); stopVoice(true); }
+        else {
+          if (usingProx()) startProximity();
+          if (usingVoice()) startVoice();
+        }
       });
     }
 
@@ -1046,6 +1078,19 @@
       const nowTs = Date.now();
       if (nowTs - lastRevealAt < 1500) return;
       lastRevealAt = nowTs;
+      const c0 = postcards[selectedPostcardIndex];
+      const m0 = document.getElementById('audioEngineSelect').value;
+      const r0 = document.getElementById('repeatToggle').checked;
+      if (voiceRec) {
+        pauseVoiceForReveal(c0, m0, r0);
+        setTimeout(doReveal, 350);
+      } else {
+        doReveal();
+      }
+    }
+
+    function doReveal() {
+      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
       const card = postcards[selectedPostcardIndex];
       const audioMode = document.getElementById('audioEngineSelect').value;
       const vol = parseFloat(document.getElementById('volumeSlider').value);
@@ -1162,38 +1207,77 @@
       }
     }
 
-    /* PROXIMITY (iOS Safari has no proximity-sensor API): detect the camera being covered */
+    /* ===================== MODO FUNCIÓN (INICIAR) ===================== */
+    let showActive = false;
+    function usingProx() { return document.getElementById('proximityToggle').checked; }
+    function usingVoice() { return document.getElementById('voiceToggle').checked; }
+
+    function updateShowUI() {
+      const btn = document.getElementById('showBtn');
+      const st = document.getElementById('showStatus');
+      const dot = document.getElementById('activeDot');
+      if (btn) {
+        btn.textContent = showActive ? '⏹ DETENER FUNCIÓN' : '▶ INICIAR FUNCIÓN';
+        btn.style.background = showActive ? '#7f1d1d' : 'linear-gradient(135deg,#b89628,#d4af37)';
+        btn.style.color = showActive ? '#fff' : '#000';
+      }
+      if (st) st.textContent = showActive ? 'FUNCIÓN ACTIVA: repite la magia las veces que quieras.' : 'Detenida.';
+      if (dot) dot.classList.toggle('visible', showActive);
+    }
+
+    function toggleShow() { if (showActive) stopShow(); else startShow(); }
+
+    function startShow() {
+      if (!appInitialized) activateAppSystemSilently();
+      saveSettings();
+      showActive = true;
+      updateShowUI();
+      if (usingProx()) startProximity();
+      if (usingVoice()) startVoice();
+      setTimeout(closeSecretPanel, 600);
+    }
+
+    function stopShow() {
+      showActive = false;
+      stopProximity();
+      stopVoice();
+      updateShowUI();
+    }
+
+    function onModeChange() {
+      saveSettings();
+      if (!showActive) return;
+      stopProximity();
+      stopVoice();
+      if (usingProx()) startProximity();
+      if (usingVoice()) startVoice();
+    }
+
+    /* ===================== PROXIMIDAD POR CÁMARA ===================== */
+    /* iOS Safari has no proximity-sensor API: we detect the camera being covered. */
     let proxStream = null, proxVideo = null, proxTimer = null, proxCtx = null;
-    let proxBase = null, proxState = 'open', proxDarkSince = 0, wakeLock = null;
+    let proxBase = 0, proxState = 'open', proxDarkSince = 0, proxArmed = false;
+    let proxWarmUntil = 0, proxOpenSince = 0, proxLastFire = 0, wakeLock = null;
+
+    function setProxStatus(t) { const el = document.getElementById('proxStatus'); if (el) el.textContent = t; }
 
     async function acquireWakeLock() {
       try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
     }
 
-    function stopProximity(keepToggle) {
+    function stopProximity() {
       clearInterval(proxTimer); proxTimer = null;
       if (proxStream) { proxStream.getTracks().forEach(t => t.stop()); proxStream = null; }
       if (proxVideo) { proxVideo.remove(); proxVideo = null; }
       try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch (e) {}
-      proxState = 'open'; proxDarkSince = 0; proxBase = null;
-      if (!keepToggle) {
-        const t = document.getElementById('proximityToggle'); if (t) t.checked = false;
-        const d = document.getElementById('activeDot'); if (d) d.classList.remove('visible');
-        const st = document.getElementById('proxStatus'); if (st) st.textContent = '';
-      }
-    }
-
-    function toggleProximity(on) {
-      if (on) { if (!appInitialized) activateAppSystemSilently(); startProximity().then(saveSettings); }
-      else { stopProximity(); saveSettings(); }
+      proxState = 'open'; proxDarkSince = 0; proxBase = 0; proxArmed = false; proxOpenSince = 0;
+      setProxStatus('');
     }
 
     async function startProximity() {
-      stopProximity(true);
-      const st = document.getElementById('proxStatus');
+      stopProximity();
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        if (st) st.textContent = 'Cámara no disponible en este navegador.';
-        document.getElementById('proximityToggle').checked = false;
+        setProxStatus('Cámara no disponible en este navegador.');
         return;
       }
       const facing = document.getElementById('proximityCamSelect').value;
@@ -1203,8 +1287,7 @@
           audio: false
         });
       } catch (e) {
-        if (st) st.textContent = 'Sin acceso a la cámara (' + (e && e.name) + '). Permite la cámara y usa la versión alojada (https).';
-        document.getElementById('proximityToggle').checked = false;
+        setProxStatus('Sin acceso a la cámara (' + (e && e.name) + '). Permite la cámara.');
         return;
       }
       proxVideo = document.createElement('video');
@@ -1218,7 +1301,7 @@
       canvas.width = 16; canvas.height = 12;
       proxCtx = canvas.getContext('2d', { willReadFrequently: true });
       acquireWakeLock();
-      const dot = document.getElementById('activeDot'); if (dot) dot.classList.add('visible');
+      proxWarmUntil = Date.now() + 2000;   // calibration: no triggers during the first 2 s
       proxTimer = setInterval(proxTick, 120);
     }
 
@@ -1229,27 +1312,144 @@
       let sum = 0;
       for (let i = 0; i < d.length; i += 4) sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
       const lum = sum / (d.length / 4);
-      if (proxBase === null) proxBase = Math.max(lum, 30);
-      const covered = proxState === 'covered'
-        ? lum < Math.max(10, proxBase * 0.55)
-        : lum < Math.max(8, proxBase * 0.3);
       const now = Date.now();
-      if (covered) {
-        if (!proxDarkSince) proxDarkSince = now;
-        if (proxState !== 'covered' && now - proxDarkSince > 500) {
-          proxState = 'covered';
-          triggerSelectionReveal();
+      const sens = parseFloat(document.getElementById('proxSensitivity').value || '0.4');
+
+      // 1) Calibration window
+      if (now < proxWarmUntil) {
+        proxBase = Math.max(proxBase, lum);
+        setProxStatus('Calibrando… no tapes la cámara. Luz: ' + Math.round(lum));
+        return;
+      }
+      // 2) Arm only after seeing the camera UNcovered (prevents firing at start)
+      if (!proxArmed) {
+        if (lum >= 14) {
+          proxBase = Math.max(proxBase, lum);
+          if (!proxOpenSince) proxOpenSince = now;
+          if (now - proxOpenSince > 700) { proxArmed = true; proxState = 'open'; }
+        } else {
+          proxOpenSince = 0;
         }
-      } else {
-        proxDarkSince = 0;
+        setProxStatus(proxArmed ? 'ARMADO. Luz: ' + Math.round(lum) : 'Destapa la cámara para armar. Luz: ' + Math.round(lum));
+        return;
+      }
+      // 3) Armed: detect cover / uncover
+      const trig = Math.max(5, proxBase * sens);
+      const release = Math.max(trig + 4, proxBase * (sens + 0.25));
+      if (proxState === 'open') {
+        if (lum < trig) {
+          if (!proxDarkSince) proxDarkSince = now;
+          if (now - proxDarkSince > 450 && now - proxLastFire > 3000) {
+            proxState = 'covered';
+            proxLastFire = now;
+            triggerSelectionReveal();
+          }
+        } else {
+          proxDarkSince = 0;
+          proxBase = proxBase * 0.97 + lum * 0.03;
+        }
+      } else if (lum > release) {
         proxState = 'open';
-        proxBase = proxBase * 0.97 + lum * 0.03;
+        proxDarkSince = 0;
       }
       const panel = document.getElementById('secretPanel');
-      const st = document.getElementById('proxStatus');
-      if (st && panel && panel.classList.contains('show')) {
-        st.textContent = 'Luz: ' + Math.round(lum) + ' (base ' + Math.round(proxBase) + ') · ' + (proxState === 'covered' ? 'TAPADA' : 'libre');
+      if (panel && panel.classList.contains('show')) {
+        setProxStatus('Luz: ' + Math.round(lum) + ' (base ' + Math.round(proxBase) + ', umbral ' + Math.round(trig) + ') · ' + (proxState === 'covered' ? 'TAPADA' : 'libre'));
       }
+    }
+
+    /* ===================== COMANDO DE VOZ ===================== */
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let voiceRec = null, voiceBlocked = false, voicePausedUntil = 0, voiceRestartTimer = null, lastVoiceFire = 0;
+    const VOICE_WORDS = ['enviamela', 'transmitela', 'piensala'];
+
+    function setVoiceStatus(t) { const el = document.getElementById('voiceStatus'); if (el) el.textContent = t; }
+
+    function normSpeech(t) {
+      return String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    function matchVoice(text) {
+      const n = normSpeech(text);
+      if (!n) return false;
+      const loose = n.replace(/\s/g, '');
+      if (VOICE_WORDS.some(w => n.includes(w) || loose.includes(w))) return true;
+      if (document.getElementById('voiceSiToggle').checked && /^(si)( si)*$/.test(n)) return true;
+      return false;
+    }
+
+    function voiceFire() {
+      const now = Date.now();
+      if (now < voicePausedUntil || now - lastVoiceFire < 3500) return;
+      lastVoiceFire = now;
+      executeReveal();     // immediate: no delay for voice commands
+    }
+
+    function startVoice() {
+      stopVoice(true);
+      if (!SpeechRec) { setVoiceStatus('Comando de voz no disponible en este navegador.'); return; }
+      if (voiceBlocked) { setVoiceStatus('Voz bloqueada. Úsala en Safari y permite el micrófono.'); return; }
+      try {
+        const rec = new SpeechRec();
+        const lang = (navigator.language || '').toLowerCase().startsWith('es') ? navigator.language : 'es-ES';
+        rec.lang = lang;
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.maxAlternatives = 3;
+        rec.onresult = (e) => {
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const res = e.results[i];
+            for (let a = 0; a < res.length; a++) {
+              const text = res[a].transcript;
+              if (a === 0) setVoiceStatus('🎤 Escuchado: "' + text.trim() + '"');
+              if (matchVoice(text)) { voiceFire(); return; }
+            }
+          }
+        };
+        rec.onerror = (e) => {
+          if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+            voiceBlocked = true;
+            setVoiceStatus('Micrófono/voz no permitido (' + e.error + '). En iPhone usa Safari (no la app instalada), activa Siri y Dictado, y permite el micrófono.');
+          }
+        };
+        rec.onend = () => {
+          if (voiceRec !== rec) return;
+          voiceRec = null;
+          if (showActive && usingVoice() && !voiceBlocked && Date.now() >= voicePausedUntil) {
+            setTimeout(() => { if (showActive && usingVoice() && !voiceRec) startVoice(); }, 300);
+          }
+        };
+        voiceRec = rec;
+        rec.start();
+        setVoiceStatus('🎤 Escuchando… (Envíamela / Transmítela / Piénsala)');
+      } catch (e) {
+        voiceRec = null;
+        setVoiceStatus('No se pudo iniciar la voz (' + (e && e.name) + ').');
+      }
+    }
+
+    function stopVoice(keepStatus) {
+      clearTimeout(voiceRestartTimer);
+      const rec = voiceRec;
+      voiceRec = null;
+      if (rec) { try { rec.abort(); } catch (e) {} }
+      if (!keepStatus) setVoiceStatus('');
+    }
+
+    function pauseVoiceForReveal(card, mode, repeat) {
+      const k = repeat ? 2 : 1;
+      let ms = 1500;
+      if (mode === 'speech' || mode === 'both') ms += 3500 * k;
+      if (mode === 'beeps' || mode === 'both') ms += card.id * 280 * k + 1200;
+      voicePausedUntil = Date.now() + ms;
+      const rec = voiceRec;
+      voiceRec = null;
+      if (rec) { try { rec.abort(); } catch (e) {} }
+      clearTimeout(voiceRestartTimer);
+      voiceRestartTimer = setTimeout(() => {
+        if (showActive && usingVoice() && !voiceRec) startVoice();
+      }, ms);
     }
 
     /* SECRET TRIGGER (TRIPLE TAP FOR PANEL, DOUBLE TAP FOR ACTIVE DOT) */
@@ -1339,7 +1539,10 @@
         repeat: document.getElementById('repeatToggle').checked,
         haptic: document.getElementById('hapticToggle').checked,
         proximityCam: document.getElementById('proximityCamSelect').value,
-        proximityOn: document.getElementById('proximityToggle').checked,
+        useProximity: document.getElementById('proximityToggle').checked,
+        useVoice: document.getElementById('voiceToggle').checked,
+        voiceSi: document.getElementById('voiceSiToggle').checked,
+        proxSens: document.getElementById('proxSensitivity').value,
         watchNotify: document.getElementById('watchNotificationToggle').checked
       };
       localStorage.setItem('camilo_attractions_settings', JSON.stringify(settings));
@@ -1359,7 +1562,13 @@
           if (s.repeat !== undefined) document.getElementById('repeatToggle').checked = s.repeat;
           if (s.haptic !== undefined) document.getElementById('hapticToggle').checked = s.haptic;
           if (s.proximityCam) document.getElementById('proximityCamSelect').value = s.proximityCam;
-          if (s.proximityOn) document.getElementById('proximityToggle').checked = true;
+          if (s.useProximity !== undefined) document.getElementById('proximityToggle').checked = s.useProximity;
+          if (s.useVoice !== undefined) document.getElementById('voiceToggle').checked = s.useVoice;
+          if (s.voiceSi !== undefined) document.getElementById('voiceSiToggle').checked = s.voiceSi;
+          if (s.proxSens) {
+            document.getElementById('proxSensitivity').value = s.proxSens;
+            document.getElementById('sensVal').textContent = Math.round(s.proxSens * 100) + '%';
+          }
           if (s.watchNotify !== undefined) document.getElementById('watchNotificationToggle').checked = s.watchNotify;
         } catch (e) {
           console.error("Error cargando ajustes:", e);
