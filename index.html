@@ -89,6 +89,7 @@ input[type=checkbox]{width:18px;height:18px;accent-color:#d4af37;flex:none}
 <div style="font-size:.68rem;color:#64748b;margin-top:15px;line-height:1.4">Derechos reservados por el Mago Camilo<br>Creación del Mago Camilo</div></div></section>
 
 <audio id="keeper" loop playsinline style="display:none"></audio>
+<div id="toast" style="position:fixed;left:50%;bottom:calc(30px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:#121620;color:#f6e05e;border:1px solid rgba(212,175,55,.5);padding:10px 18px;border-radius:999px;font-size:.85rem;font-weight:700;opacity:0;pointer-events:none;transition:opacity .25s;z-index:70"></div>
 
 <header><div class="hc">
   <div id="secretHeaderTrigger"><div class="t">Atracciones Mundiales<span id="activeDot">.</span></div><div class="st">Colección Exclusiva del Mundo</div></div>
@@ -120,8 +121,8 @@ input[type=checkbox]{width:18px;height:18px;accent-color:#d4af37;flex:none}
   <div class="row"><div><b>Proximidad (cámara tapada)</b><small>Envía la señal al poner el teléfono sobre el pecho. Se repite cada vez que lo tapas.</small></div><input type="checkbox" id="proximityToggle" checked></div>
   <div><div class="mono" style="margin-bottom:4px">Cámara que se tapa:</div>
     <select id="proximityCamSelect"><option value="user" selected>Frontal (pantalla contra el pecho)</option><option value="environment">Trasera (pantalla hacia afuera)</option></select></div>
-  <div><div class="mono" style="display:flex;justify-content:space-between;margin-bottom:4px"><span>Sensibilidad al taparla:</span><span id="sensVal">60%</span></div>
-    <input type="range" id="proxSensitivity" min="0.2" max="0.85" step="0.05" value="0.6"></div>
+  <div><div class="mono" style="display:flex;justify-content:space-between;margin-bottom:4px"><span>Sensibilidad al taparla:</span><span id="sensVal">70%</span></div>
+    <input type="range" id="proxSensitivity" min="0.2" max="0.85" step="0.05" value="0.7"></div>
   <div class="row"><div><b>Pitido de «listo»</b><small>Un pitido suave cuando la proximidad queda armada.</small></div><input type="checkbox" id="confirmToggle" checked></div>
   <div id="proxStatus" class="mono"></div>
 
@@ -237,9 +238,9 @@ function wavBlob(d,sr){const b=new ArrayBuffer(44+d.length*2),v=new DataView(b),
   w(0,'RIFF');v.setUint32(4,36+d.length*2,true);w(8,'WAVEfmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,d.length*2,true);
   for(let i=0;i<d.length;i++)v.setInt16(44+i*2,d[i],true);return new Blob([b],{type:'audio/wav'})}
 function silentUrl(){const d=new Int16Array(16000);for(let i=0;i<d.length;i++)d[i]=i%7===0?1:(i%11===0?-1:0);return URL.createObjectURL(wavBlob(d,8000))}
-function beepBlob(count,repeat,amp){amp=amp||1;const sr=22050,pulse=Math.floor(sr*.14),gap=pulse,run=count*(pulse+gap),between=Math.floor(sr*.5),total=repeat?run*2+between:run,d=new Int16Array(total);
+function beepBlob(count,rp,amp){amp=amp||1;const sr=22050,pulse=Math.floor(sr*.14),gap=pulse,run=count*(pulse+gap),between=Math.floor(sr*.5),reps=Math.max(1,(rp|0)||1),total=run*reps+between*(reps-1),d=new Int16Array(total);
   const wr=off=>{for(let i=0;i<count;i++){const b=off+i*(pulse+gap);for(let n=0;n<pulse;n++){const env=Math.min(1,n/200,(pulse-n)/400);d[b+n]=Math.round(Math.sin(2*Math.PI*880*n/sr)*32000*amp*env)}}};
-  wr(0);if(repeat)wr(run+between);return wavBlob(d,sr)}
+  for(let r=0;r<reps;r++)wr(r*(run+between));return wavBlob(d,sr)}
 
 /* ---------- AUDIO / ARRANQUE ---------- */
 function activateAudio(){
@@ -279,19 +280,20 @@ function triggerSelectionReveal(){
   try{const k=$('keeper');if(k.paused)k.play().catch(()=>{});if(audioCtx&&audioCtx.state==='suspended')audioCtx.resume()}catch(e){}
   if(delay===0)executeReveal();else setTimeout(executeReveal,delay);
 }
-function executeReveal(){
+function executeReveal(n){
+  n=n||($('repeatToggle').checked?2:1);
   const now=Date.now();if(now-lastRevealAt<1500){dlog('Envío ignorado (muy seguido)');return}lastRevealAt=now;dlog('Envío: '+postcards[selectedIndex].name);
-  if(voiceRec){pauseVoiceForReveal(postcards[selectedIndex],$('audioEngineSelect').value,$('repeatToggle').checked);setTimeout(doReveal,700)}else doReveal();
+  if(voiceRec){pauseVoiceForReveal(postcards[selectedIndex],$('audioEngineSelect').value,n);setTimeout(()=>doReveal(n),700)}else doReveal(n);
 }
-function doReveal(){
+function doReveal(n){
   try{if(navigator.audioSession)navigator.audioSession.type='playback'}catch(e){}
-  const card=postcards[selectedIndex],mode=$('audioEngineSelect').value,vol=parseFloat($('volumeSlider').value),repeat=$('repeatToggle').checked;
-  let beeped=false;const startBeeps=()=>{if(beeped)return;beeped=true;playBeeps(card.id,repeat)};
+  const card=postcards[selectedIndex],mode=$('audioEngineSelect').value,vol=parseFloat($('volumeSlider').value);n=n||($('repeatToggle').checked?2:1);
+  let beeped=false;const startBeeps=()=>{if(beeped)return;beeped=true;playBeeps(card.id,n)};
   if(mode==='speech'||mode==='both'){
     if('speechSynthesis'in window){
       synth.cancel();
-      const u=new SpeechSynthesisUtterance(repeat?card.name+'... '+card.name:card.name);u.volume=vol;u.rate=.9;u.lang='es-ES';u.onstart=()=>dlog('Voz: inicia');if(mode!=='both'){u.onend=()=>dlog('Voz: fin');u.onerror=e=>dlog('Voz error: '+(e&&e.error))}
-      if(mode==='both'){u.onend=()=>{dlog('Voz: fin');setTimeout(startBeeps,300)};u.onerror=e=>{dlog('Voz error: '+(e&&e.error));startBeeps()};setTimeout(startBeeps,6000);
+      const u=new SpeechSynthesisUtterance(Array(n).fill(card.name).join('... '));u.volume=vol;u.rate=.9;u.lang='es-ES';u.onstart=()=>dlog('Voz: inicia');if(mode!=='both'){u.onend=()=>dlog('Voz: fin');u.onerror=e=>dlog('Voz error: '+(e&&e.error))}
+      if(mode==='both'){u.onend=()=>{dlog('Voz: fin');setTimeout(startBeeps,300)};u.onerror=e=>{dlog('Voz error: '+(e&&e.error));startBeeps()};setTimeout(startBeeps,4000+n*2000);
         setTimeout(()=>{if(!synth.speaking&&!synth.pending)startBeeps()},1200)}   /* si la voz no arranca, salen los tonos igual */
       synth.speak(u);
     }else if(mode==='both')startBeeps();
@@ -302,11 +304,11 @@ function doReveal(){
     if('serviceWorker'in navigator)navigator.serviceWorker.ready.then(r=>r.showNotification(t,o)).catch(lg);else lg();
   }
 }
-function playBeeps(count,repeat){
-  try{const url=URL.createObjectURL(beepBlob(count,repeat));if(!signalEl)signalEl=new Audio();signalEl.onended=()=>URL.revokeObjectURL(url);signalEl.src=url;const p=signalEl.play();if(p&&p.then)p.then(()=>dlog('Tonos: OK')).catch(e=>dlog('Tonos bloqueados: '+(e&&e.name)))}catch(e){dlog('Tonos: error')}
+function playBeeps(count,reps){
+  try{const url=URL.createObjectURL(beepBlob(count,reps));if(!signalEl)signalEl=new Audio();signalEl.onended=()=>URL.revokeObjectURL(url);signalEl.src=url;const p=signalEl.play();if(p&&p.then)p.then(()=>dlog('Tonos: OK')).catch(e=>dlog('Tonos bloqueados: '+(e&&e.name)))}catch(e){dlog('Tonos: error')}
 }
 function confirmBeep(){
-  try{if(!$('confirmToggle').checked)return;const url=URL.createObjectURL(beepBlob(1,false,.25));if(!signalEl)signalEl=new Audio();signalEl.src=url;signalEl.play().catch(()=>{})}catch(e){}
+  try{if(!$('confirmToggle').checked)return;const url=URL.createObjectURL(beepBlob(1,1,.25));if(!signalEl)signalEl=new Audio();signalEl.src=url;signalEl.play().catch(()=>{})}catch(e){}
 }
 
 /* ---------- FUNCIÓN (INICIAR / DETENER) ---------- */
@@ -316,18 +318,22 @@ function updateShowUI(){
   $('showStatus').textContent=showActive?'FUNCIÓN ACTIVA: repite la magia las veces que quieras.':'Detenida.';paintDot();
 }
 function toggleShow(){showActive?stopShow():startShow()}
+const NS_MP4='AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAANMbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAB9AAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAnZ0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAB9AAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAEAAAABAAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAfQAAAAAAABAAAAAAHubWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAAAoAAAAUABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABmW1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAVlzdGJsAAAAuXN0c2QAAAAAAAAAAQAAAKlhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAEAAQABIAAAASAAAAAAAAAABFUxhdmM2MC4zMS4xMDIgbGlieDI2NAAAAAAAAAAAAAAAGP//AAAAL2F2Y0MBQsAe/+EAF2dCwB7ZBCbARAAAAwAEAAADACg8WLkgAQAFaMuDyyAAAAAQcGFzcAAAAAEAAAABAAAAFGJ0cnQAAAAAAAALqAAAC6gAAAAYc3R0cwAAAAAAAAABAAAACgAACAAAAAAUc3RzcwAAAAAAAAABAAAAAQAAABxzdHNjAAAAAAAAAAEAAAABAAAACgAAAAEAAAA8c3RzegAAAAAAAAAAAAAACgAAAo8AAAAKAAAACwAAAAoAAAAKAAAACgAAAAoAAAAKAAAACgAAAAoAAAAUc3RjbwAAAAAAAAABAAADfAAAAGJ1ZHRhAAAAWm1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALWlsc3QAAAAlqXRvbwAAAB1kYXRhAAAAAQAAAABMYXZmNjAuMTYuMTAwAAAACGZyZWUAAALybWRhdAAAAnAGBf//bNxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjQgcjMxMDggMzFlMTlmOSAtIEguMjY0L01QRUctNCBBVkMgY29kZWMgLSBDb3B5bGVmdCAyMDAzLTIwMjMgLSBodHRwOi8vd3d3LnZpZGVvbGFuLm9yZy94MjY0Lmh0bWwgLSBvcHRpb25zOiBjYWJhYz0wIHJlZj0zIGRlYmxvY2s9MTowOjAgYW5hbHlzZT0weDE6MHgxMTEgbWU9aGV4IHN1Ym1lPTcgcHN5PTEgcHN5X3JkPTEuMDA6MC4wMCBtaXhlZF9yZWY9MSBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTEgOHg4ZGN0PTAgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFzdF9wc2tpcD0xIGNocm9tYV9xcF9vZmZzZXQ9LTIgdGhyZWFkcz0xIGxvb2thaGVhZF90aHJlYWRzPTEgc2xpY2VkX3RocmVhZHM9MCBucj0wIGRlY2ltYXRlPTEgaW50ZXJsYWNlZD0wIGJsdXJheV9jb21wYXQ9MCBjb25zdHJhaW5lZF9pbnRyYT0wIGJmcmFtZXM9MCB3ZWlnaHRwPTAga2V5aW50PTI1MCBrZXlpbnRfbWluPTUgc2NlbmVjdXQ9NDAgaW50cmFfcmVmcmVzaD0wIHJjX2xvb2thaGVhZD00MCByYz1jcmYgbWJ0cmVlPTEgY3JmPTIzLjAgcWNvbXA9MC42MCBxcG1pbj0wIHFwbWF4PTY5IHFwc3RlcD00IGlwX3JhdGlvPTEuNDAgYXE9MToxLjAwAIAAAAAXZYiEBHyYoAA2IycnJ1111111111114AAAAAGQZo4CPhGAAAAB0GaVAI+EYAAAAAGQZpgEfCMAAAABkGagBHwjAAAAAZBmqAR8IwAAAAGQZrAEfCMAAAABkGa4BHwjAAAAAZBmwAQ8IwAAAAGQZsgP8Iw';let nsVideo=null;
+function nsStart(){try{if(!nsVideo){nsVideo=document.createElement('video');nsVideo.setAttribute('playsinline','');nsVideo.muted=true;nsVideo.loop=true;nsVideo.src='data:video/mp4;base64,'+NS_MP4;nsVideo.style.cssText='position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:.02;pointer-events:none';document.body.appendChild(nsVideo)}nsVideo.play().then(()=>dlog('Pantalla: se mantiene encendida')).catch(e=>dlog('Pantalla: no se pudo ('+(e&&e.name)+')'))}catch(e){}}
+function nsStop(){try{if(nsVideo)nsVideo.pause()}catch(e){}}
 function startShow(){
+  nsStart();
   activateAudio();saveSettings();showActive=true;updateShowUI();
   if(usingVoice())startVoice();if(usingProx())startProximity();
   setTimeout(()=>{if(!usingProx()||proxStream)closePanel()},1800);   /* si la cámara falla, el panel queda abierto con el motivo */
 }
-function stopShow(){showActive=false;stopProximity();stopVoice();updateShowUI()}
+function stopShow(){showActive=false;nsStop();stopProximity();stopVoice();updateShowUI()}
 function onModeChange(){saveSettings();if(!showActive)return;stopProximity();stopVoice();if(usingVoice())startVoice();if(usingProx())startProximity()}
 
 function handleCerrar(){
-  activateAudio();lastRevealAt=0;executeReveal();
-  $('welcomeGate').style.display='flex';$('accessCodeInput').value='';$('gateMessage').textContent='Selección enviada. Puedes volver a entrar cuando quieras.';
+  activateAudio();lastRevealAt=0;executeReveal(3);toast('✔ Selección guardada');
 }
+function toast(t){const e=$('toast');e.textContent=t;e.style.opacity='1';clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.opacity='0',1700)}
 
 /* ---------- ACCESO LOCAL (demostración) ---------- */
 const OWNER_PIN='140995Whi',DEVICE_KEY='camilo_attractions_device_id',CODES_KEY='camilo_attractions_demo_codes',INST_KEY='camilo_attractions_demo_installs';
@@ -392,14 +398,14 @@ function proxTick(){
   const sens=parseFloat($('proxSensitivity').value||'.6'),open=$('secretPanel').classList.contains('show');
   if(now<proxWarmUntil){setProxStatus('Calibrando… no tapes la cámara. Luz: '+Math.round(lum));return}
   if(!proxArmed){
-    if(lum>=8){if(!proxOpenSince)proxOpenSince=now;if(now-proxOpenSince>500){proxArmed=true;proxState='open';proxSamples=[{t:now,l:lum}];dlog('ARMADO luz '+Math.round(lum));confirmBeep();paintDot()}}else proxOpenSince=0;
+    if(lum>=4){if(!proxOpenSince)proxOpenSince=now;if(now-proxOpenSince>500){proxArmed=true;proxState='open';proxSamples=[{t:now,l:lum}];dlog('ARMADO luz '+Math.round(lum));confirmBeep();paintDot()}}else proxOpenSince=0;
     setProxStatus(proxArmed?'ARMADO. Luz: '+Math.round(lum):'Destapa la cámara para armar. Luz: '+Math.round(lum));return;
   }
   if(proxState==='open'){
     proxSamples.push({t:now,l:lum});proxSamples=proxSamples.filter(x=>now-x.t<=5000);
     proxBase=proxSamples.reduce((m,x)=>Math.max(m,x.l),0);
-    const trig=Math.max(3,proxBase*sens);
-    if(proxBase>=8&&lum<trig){
+    const trig=Math.max(2,proxBase*sens);
+    if(proxBase>=4&&lum<trig){
       if(!proxDarkSince)proxDarkSince=now;
       if(now-proxDarkSince>250&&now-proxLastFire>3000){proxState='covered';proxLastFire=now;proxFrozenBase=proxBase;proxCoveredMin=lum;dlog('TAPADA luz '+Math.round(lum)+' base '+Math.round(proxBase)+' umbral '+Math.round(trig));triggerSelectionReveal()}
     }else proxDarkSince=0;
@@ -449,8 +455,7 @@ function startVoice(){
   }catch(e){voiceRec=null;setVoiceStatus('No se pudo iniciar la voz ('+(e&&e.name)+'). Toca la pantalla para reintentar.')}
 }
 function stopVoice(keep){clearTimeout(voiceRestartTimer);clearTimeout(siNoTimer);const r=voiceRec;voiceRec=null;if(r){try{r.abort()}catch(e){}}if(!keep)setVoiceStatus('')}
-function pauseVoiceForReveal(card,mode,repeat){
-  const k=repeat?2:1;let ms=1500;if(mode==='speech'||mode==='both')ms+=3500*k;if(mode==='beeps'||mode==='both')ms+=card.id*280*k+1200;
+function pauseVoiceForReveal(card,mode,k){let ms=1500;if(mode==='speech'||mode==='both')ms+=3500*k;if(mode==='beeps'||mode==='both')ms+=card.id*280*k+1200;
   voicePausedUntil=Date.now()+ms;clearTimeout(siNoTimer);const r=voiceRec;voiceRec=null;if(r){try{r.abort()}catch(e){}}
   clearTimeout(voiceRestartTimer);voiceRestartTimer=setTimeout(()=>{if(showActive&&usingVoice()&&!voiceRec)startVoice()},ms);
 }
@@ -494,16 +499,16 @@ function setupVoiceTapRestart(){
 }
 document.addEventListener('visibilitychange',()=>{
   if(!showActive)return;
-  dlog(document.hidden?'Pantalla oculta/bloqueada':'Pantalla visible');
+  dlog(document.hidden?'Pantalla oculta/bloqueada':'Pantalla visible');if(!document.hidden)nsStart();
   if(document.hidden){stopProximity();stopVoice(true)}else{if(usingVoice())startVoice();if(usingProx())startProximity()}
 });
 
 /* ---------- AJUSTES ---------- */
 const SET=['audioEngineSelect','volumeSlider','delaySelect','repeatToggle','proximityCamSelect','proximityToggle','voiceToggle','voiceSiToggle','proxSensitivity','confirmToggle','watchNotificationToggle'];
 function updTexts(){$('volumeVal').textContent=Math.round($('volumeSlider').value*100)+'%';$('sensVal').textContent=Math.round($('proxSensitivity').value*100)+'%'}
-function saveSettings(){const s={};SET.forEach(i=>{const e=$(i);s[i]=e.type==='checkbox'?e.checked:e.value});try{localStorage.setItem('camilo_attractions_settings2',JSON.stringify(s))}catch(e){}}
+function saveSettings(){const s={};SET.forEach(i=>{const e=$(i);s[i]=e.type==='checkbox'?e.checked:e.value});try{localStorage.setItem('camilo_attractions_settings3',JSON.stringify(s))}catch(e){}}
 function loadSettings(){
-  try{const s=JSON.parse(localStorage.getItem('camilo_attractions_settings2')||'{}');SET.forEach(i=>{if(s[i]===undefined)return;const e=$(i);if(e.type==='checkbox')e.checked=s[i];else e.value=s[i]})}catch(e){}
+  try{const s=JSON.parse(localStorage.getItem('camilo_attractions_settings3')||'{}');SET.forEach(i=>{if(s[i]===undefined)return;const e=$(i);if(e.type==='checkbox')e.checked=s[i];else e.value=s[i]})}catch(e){}
   updTexts();
 }
 function testAudio(){
