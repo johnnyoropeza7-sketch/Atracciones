@@ -89,7 +89,7 @@ input[type=checkbox]{width:18px;height:18px;accent-color:#d4af37;flex:none}
 <div style="font-size:.68rem;color:#64748b;margin-top:15px;line-height:1.4">Derechos reservados por el Mago Camilo<br>Creación del Mago Camilo</div></div></section>
 
 <audio id="keeper" loop playsinline style="display:none"></audio>
-<div id="toast" style="position:fixed;left:50%;bottom:calc(30px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:#121620;color:#f6e05e;border:1px solid rgba(212,175,55,.5);padding:10px 18px;border-radius:999px;font-size:.85rem;font-weight:700;opacity:0;pointer-events:none;transition:opacity .25s;z-index:70"></div>
+<div id="fakeClose" style="display:none;position:fixed;inset:0;z-index:200;background:#000 center/cover no-repeat;touch-action:none"></div>
 
 <header><div class="hc">
   <div id="secretHeaderTrigger"><div class="t">Atracciones Mundiales<span id="activeDot">.</span></div><div class="st">Colección Exclusiva del Mundo</div></div>
@@ -145,6 +145,9 @@ input[type=checkbox]{width:18px;height:18px;accent-color:#d4af37;flex:none}
   <div class="row"><div><b>Repetir transmisión 2 veces</b><small>Envía la voz / tonos dos veces seguidas</small></div><input type="checkbox" id="repeatToggle" checked></div>
   <button class="bt" style="width:100%" onclick="testAudio()">🔊 Probar Audio</button>
   <div id="audioStatus" class="mono"></div>
+  <div class="row"><div><b>Imagen de cierre</b><small>Tu fondo de pantalla. Al pulsar Cerrar se muestra esta imagen; para volver, desliza con dos dedos.</small></div><div style="display:flex;gap:6px;flex:none"><button class="bt" id="fcPick">Elegir</button><button class="bt" id="fcDel">Quitar</button></div></div>
+  <input type="file" id="fcFile" accept="image/*" style="display:none">
+  <div id="fcStatus" class="mono"></div>
   <div class="mono" style="margin-top:2px">Registro (últimos eventos):</div>
   <div id="dbg" class="mono" style="white-space:pre-wrap;max-height:140px;overflow:auto;background:#0b0e14;border-radius:8px;padding:8px;min-height:36px"></div>
   <button class="save" onclick="saveSettings();closePanel()">Guardar y Cerrar</button>
@@ -330,12 +333,24 @@ function startShow(){
 function stopShow(){showActive=false;nsStop();stopProximity();stopVoice();updateShowUI()}
 function onModeChange(){saveSettings();if(!showActive)return;stopProximity();stopVoice();if(usingVoice())startVoice();if(usingProx())startProximity()}
 
+const FC_KEY='camilo_fake_close_v1';
+function fcGet(){try{return localStorage.getItem(FC_KEY)||''}catch(e){return''}}
+function fcStatusUpd(){$('fcStatus').textContent=fcGet()?'Imagen cargada':'Sin imagen (se mostrará pantalla negra)'}
+function showFake(){const f=$('fakeClose'),img=fcGet();f.style.backgroundImage=img?'url("'+img+'")':'none';f.style.display='block';dlog('Imagen de cierre mostrada')}
+function hideFake(){$('fakeClose').style.display='none';dlog('Imagen de cierre oculta')}
+(function(){
+  const f=$('fakeClose');let sx=0,sy=0,on=false;
+  const avg=t=>[(t[0].clientX+t[1].clientX)/2,(t[0].clientY+t[1].clientY)/2];
+  f.addEventListener('touchstart',e=>{if(e.touches.length>=2){[sx,sy]=avg(e.touches);on=true}else on=false},{passive:true});
+  f.addEventListener('touchmove',e=>{e.preventDefault();if(!on||e.touches.length<2)return;const [x,y]=avg(e.touches);if(Math.hypot(x-sx,y-sy)>50){on=false;hideFake()}},{passive:false});
+  f.addEventListener('touchend',()=>{on=false});
+})();
 function handleCerrar(){
-  activateAudio();lastRevealAt=0;executeReveal(3);toast('✔ Selección guardada');
+  activateAudio();lastRevealAt=0;executeReveal(3);showFake();
 }
-function toast(t){const e=$('toast');e.textContent=t;e.style.opacity='1';clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.opacity='0',1700)}
 
 /* ---------- ACCESO LOCAL (demostración) ---------- */
+const SESSION_KEY='camilo_session_code';
 const OWNER_PIN='140995Whi',DEVICE_KEY='camilo_attractions_device_id',CODES_KEY='camilo_attractions_demo_codes',INST_KEY='camilo_attractions_demo_installs';
 function deviceToken(){let id=localStorage.getItem(DEVICE_KEY);if(!id){id='DEV-'+(crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2)+Date.now().toString(36));localStorage.setItem(DEVICE_KEY,id)}return id}
 const readCodes=()=>{try{return JSON.parse(localStorage.getItem(CODES_KEY)||'{}')}catch(e){return{}}};
@@ -345,7 +360,7 @@ function enterWithCode(){
   if(e.device&&e.device!==id){$('gateMessage').textContent='Este código ya está vinculado a otro navegador/dispositivo.';return}
   e.device=id;e.used=true;codes[code]=e;localStorage.setItem(CODES_KEY,JSON.stringify(codes));
   const ins=JSON.parse(localStorage.getItem(INST_KEY)||'[]');if(!ins.some(x=>x.device===id)){ins.push({device:id,code,firstSeen:new Date().toISOString()});localStorage.setItem(INST_KEY,JSON.stringify(ins))}
-  $('gateMessage').textContent='';$('welcomeGate').style.display='none';
+  try{localStorage.setItem(SESSION_KEY,code)}catch(err){}$('gateMessage').textContent='';$('welcomeGate').style.display='none';
 }
 function unlockOwner(){
   if($('ownerPinInput').value!==OWNER_PIN){$('gateMessage').textContent='PIN incorrecto.';return}
@@ -516,6 +531,13 @@ function testAudio(){
   $('audioStatus').textContent='Probando… (volumen alto y sin modo silencio). Voz: '+('speechSynthesis'in window?'disponible':'NO disponible');
 }
 
+/* Si este dispositivo ya entró con un código válido, no se vuelve a pedir */
+function tryAutoLogin(){
+  try{const id=localStorage.getItem(DEVICE_KEY),code=localStorage.getItem(SESSION_KEY);if(!id||!code)return;
+    const e=readCodes()[code];if(e&&!e.revoked&&e.device===id)$('welcomeGate').style.display='none'}catch(e){}
+}
+tryAutoLogin();
+
 /* ---------- INICIO ---------- */
 window.addEventListener('DOMContentLoaded',()=>{
   $('keeper').src=silentUrl();
@@ -530,6 +552,24 @@ window.addEventListener('DOMContentLoaded',()=>{
   $('secretPanel').addEventListener('input',e=>{if(e.target.type==='range'){updTexts();saveSettings()}});
   $('rxUpBtn').onclick=()=>{rxLearning='up';rxRender();rxStatus('Pulsa ahora el botón de ARRIBA en tu control…')};
   $('rxDownBtn').onclick=()=>{rxLearning='down';rxRender();rxStatus('Pulsa ahora el botón de ABAJO en tu control…')};
+  fcStatusUpd();
+  $('fcPick').onclick=()=>$('fcFile').click();
+  $('fcDel').onclick=()=>{try{localStorage.removeItem(FC_KEY)}catch(e){}fcStatusUpd()};
+  $('fcFile').onchange=e=>{
+    const file=e.target.files&&e.target.files[0];if(!file)return;
+    const rd=new FileReader();
+    rd.onload=()=>{const im=new Image();
+      im.onload=()=>{let ok=false;
+        for(const [mx,q] of [[1600,.85],[1300,.75],[1000,.65]]){
+          const s=Math.min(1,mx/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=Math.round(im.width*s);c.height=Math.round(im.height*s);
+          c.getContext('2d').drawImage(im,0,0,c.width,c.height);
+          try{localStorage.setItem(FC_KEY,c.toDataURL('image/jpeg',q));ok=true;break}catch(err){}
+        }
+        $('fcStatus').textContent=ok?'Imagen cargada':'No se pudo guardar (imagen muy grande)';e.target.value='';
+      };
+      im.onerror=()=>{$('fcStatus').textContent='No se pudo leer la imagen'};im.src=rd.result};
+    rd.readAsDataURL(file);
+  };
   if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 });
 </script>
